@@ -5,7 +5,7 @@ export const sampleBookings: Booking[] = [
   {
     id: 'RESV12345',
     platform: 'airbnb',
-    propertyName: 'Joglo Breeze Villa',
+    propertyName: 'ReservCheck Demo Property',
     guestName: 'John Doe',
     checkInDate: new Date('2025-07-10'),
     checkOutDate: new Date('2025-07-13'),
@@ -18,7 +18,7 @@ export const sampleBookings: Booking[] = [
   {
     id: 'RESV12346',
     platform: 'airbnb',
-    propertyName: 'Joglo Breeze Villa',
+    propertyName: 'ReservCheck Demo Property',
     guestName: 'Jane Smith',
     checkInDate: new Date('2025-07-15'),
     checkOutDate: new Date('2025-07-18'),
@@ -31,7 +31,7 @@ export const sampleBookings: Booking[] = [
   {
     id: 'BLOCK001',
     platform: 'airbnb',
-    propertyName: 'Joglo Breeze Villa',
+    propertyName: 'ReservCheck Demo Property',
     guestName: 'Maintenance Block',
     checkInDate: new Date('2025-07-20'),
     checkOutDate: new Date('2025-07-22'),
@@ -44,7 +44,7 @@ export const sampleBookings: Booking[] = [
   {
     id: 'BDC789456',
     platform: 'booking.com',
-    propertyName: 'Joglo Breeze Villa',
+    propertyName: 'ReservCheck Demo Property',
     guestName: 'Maria Garcia',
     checkInDate: new Date('2025-07-25'),
     checkOutDate: new Date('2025-07-28'),
@@ -57,7 +57,7 @@ export const sampleBookings: Booking[] = [
   {
     id: 'RESV54321',
     platform: 'airbnb',
-    propertyName: 'Joglo Breeze Villa',
+    propertyName: 'ReservCheck Demo Property',
     guestName: 'David Brown',
     checkInDate: new Date('2025-08-01'),
     checkOutDate: new Date('2025-08-05'),
@@ -70,7 +70,7 @@ export const sampleBookings: Booking[] = [
   {
     id: 'BDC654321',
     platform: 'booking.com',
-    propertyName: 'Joglo Breeze Villa',
+    propertyName: 'ReservCheck Demo Property',
     guestName: 'Lisa Anderson',
     checkInDate: new Date('2025-08-08'),
     checkOutDate: new Date('2025-08-10'),
@@ -84,7 +84,7 @@ export const sampleBookings: Booking[] = [
   {
     id: 'MIXED001',
     platform: 'airbnb',
-    propertyName: 'Joglo Breeze Villa',
+    propertyName: 'ReservCheck Demo Property',
     guestName: 'Tom Wilson',
     checkInDate: new Date('2025-07-25'),
     checkOutDate: new Date('2025-07-25'),
@@ -97,7 +97,7 @@ export const sampleBookings: Booking[] = [
   {
     id: 'MIXED002',
     platform: 'booking.com',
-    propertyName: 'Joglo Breeze Villa',
+    propertyName: 'ReservCheck Demo Property',
     guestName: 'Sarah Johnson',
     checkInDate: new Date('2025-07-30'),
     checkOutDate: new Date('2025-07-30'),
@@ -110,7 +110,7 @@ export const sampleBookings: Booking[] = [
   {
     id: 'MIXED003',
     platform: 'airbnb',
-    propertyName: 'Joglo Breeze Villa',
+    propertyName: 'ReservCheck Demo Property',
     guestName: 'Mike Davis',
     checkInDate: new Date('2025-07-30'),
     checkOutDate: new Date('2025-07-30'),

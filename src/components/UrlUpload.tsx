@@ -62,12 +62,19 @@ export default function UrlUpload({ onImport, onUpload, isImporting, onCancel }:
       await onImport(icalUrl);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to import calendar data';
+      
+      // Provide more user-friendly error messages
       if (errorMessage.includes('CORS') || errorMessage.includes('security restrictions')) {
-        setError('Unable to fetch calendar directly due to browser security. Please try: 1) Download the .ics file from your platform, 2) Switch to "File Upload" tab, 3) Upload the downloaded file.');
+        setError('🔒 Browser security restrictions prevented direct access to the calendar. Our system is automatically trying alternative methods to fetch your calendar data. Please wait a moment and try again.');
       } else if (errorMessage.includes('HTTP error') || errorMessage.includes('fetch')) {
-        setError('Failed to access the calendar URL. Please check: 1) URL is correct and accessible, 2) Try downloading the .ics file manually and uploading it instead.');
+        setError('🌐 Unable to access the calendar URL. Please ensure: 1) The URL is correct and accessible, 2) The calendar is set to public/shareable, 3) Your internet connection is stable.');
+      } else if (errorMessage.includes('Invalid iCal format')) {
+        setError('📄 The URL does not contain valid calendar data. Please check that you are using the correct calendar export URL from Airbnb or Booking.com.');
+      } else if (errorMessage.includes('Domain not allowed')) {
+        setError('🚫 For security reasons, only calendar URLs from Airbnb, Booking.com, and major calendar providers are supported.');
       } else {
-        setError(errorMessage);
+        // If all automated methods fail, provide helpful guidance
+        setError('⚠️ Unable to automatically fetch the calendar. This can happen due to various restrictions. Please try downloading the .ics file manually from your platform and use the "File Upload" option instead.');
       }
     }
   };

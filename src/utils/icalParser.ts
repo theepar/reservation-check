@@ -262,6 +262,118 @@ function parseICalContent(icalContent: string, sourceUrl?: string): Booking[] {
   return bookings;
 }
 
+// Helper function to try direct fetch
+async function tryDirectFetch(url: string): Promise<string | null> {
+  try {
+    console.log('🔄 Strategy 1: Direct fetch');
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/calendar, text/plain, */*',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      },
+      mode: 'cors'
+    });
+    
+    if (response.ok) {
+      const content = await response.text();
+      console.log('✅ Direct fetch successful, length:', content.length);
+      return content;
+    } else {
+      console.warn('❌ Direct fetch failed with status:', response.status);
+    }
+  } catch (error) {
+    console.warn('❌ Direct fetch failed due to CORS:', error);
+  }
+  return null;
+}
+
+// Helper function to try proxy services
+async function tryProxyServices(url: string): Promise<string | null> {
+  const proxyServices = [
+    {
+      name: 'AllOrigins',
+      url: `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+      parseResponse: async (response: Response) => {
+        const data = await response.json();
+        return data.contents;
+      }
+    },
+    {
+      name: 'CorsProxy.io',
+      url: `https://corsproxy.io/?${encodeURIComponent(url)}`,
+      parseResponse: async (response: Response) => {
+        return await response.text();
+      }
+    },
+    {
+      name: 'Proxy.cors.sh',
+      url: `https://proxy.cors.sh/${url}`,
+      parseResponse: async (response: Response) => {
+        return await response.text();
+      }
+    },
+    {
+      name: 'ThingProxy',
+      url: `https://thingproxy.freeboard.io/fetch/${url}`,
+      parseResponse: async (response: Response) => {
+        return await response.text();
+      }
+    }
+  ];
+  
+  for (const proxy of proxyServices) {
+    try {
+      console.log(`🔄 Strategy 2: Trying ${proxy.name}...`);
+      const response = await fetch(proxy.url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'text/calendar, text/plain, application/json, */*',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+      
+      if (response.ok) {
+        const content = await proxy.parseResponse(response);
+        if (content && typeof content === 'string' && content.length > 0) {
+          console.log(`✅ ${proxy.name} successful, length:`, content.length);
+          return content;
+        }
+      } else {
+        console.warn(`❌ ${proxy.name} failed with status:`, response.status);
+      }
+    } catch (error) {
+      console.warn(`❌ ${proxy.name} failed:`, error);
+    }
+  }
+  return null;
+}
+
+// Helper function to try server-side proxy
+async function tryServerProxy(url: string): Promise<string | null> {
+  try {
+    console.log('🔄 Strategy 3: Server-side proxy');
+    const response = await fetch('/api/proxy-calendar', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url })
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log('✅ Server-side proxy successful, length:', data.content.length);
+      return data.content;
+    } else {
+      console.warn('❌ Server-side proxy failed with status:', response.status);
+    }
+  } catch (error) {
+    console.warn('❌ Server-side proxy failed:', error);
+  }
+  return null;
+}
+
 // Fetch iCal from URL and parse it
 export async function fetchAirbnbCalendar(url: string): Promise<Booking[]> {
   if (!url) {
@@ -271,72 +383,31 @@ export async function fetchAirbnbCalendar(url: string): Promise<Booking[]> {
   try {
     console.log('🔍 Fetching iCal from URL:', url);
     
-    // Try direct fetch first
-    let response;
     let icalContent = '';
     
-    try {
-      response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Accept': 'text/calendar, text/plain, */*',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        },
-        mode: 'cors'
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status} - ${response.statusText}`);
-      }
-      
-      icalContent = await response.text();
-      console.log('📥 Received iCal content directly, length:', icalContent.length);
-      console.log('📄 First 200 chars:', icalContent.substring(0, 200));
-      
-    } catch (corsError) {
-      console.warn('Direct fetch failed, trying proxy method...', corsError);
-      
-      // Try multiple proxy methods for better compatibility
-      const proxyUrls = [
-        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-        `https://corsproxy.io/?${encodeURIComponent(url)}`,
-        `https://cors-anywhere.herokuapp.com/${url}`
-      ];
-      
-      for (const proxyUrl of proxyUrls) {
-        try {
-          console.log('🔄 Trying proxy:', proxyUrl);
-          response = await fetch(proxyUrl);
-          
-          if (!response.ok) {
-            console.warn(`Proxy failed with status: ${response.status}`);
-            continue;
-          }
-          
-          // Handle different proxy response formats
-          const contentType = response.headers.get('content-type');
-          if (contentType?.includes('application/json')) {
-            const proxyData = await response.json();
-            icalContent = proxyData.contents ?? proxyData.data ?? proxyData;
-          } else {
-            icalContent = await response.text();
-          }
-          
-          if (icalContent && typeof icalContent === 'string') {
-            console.log('📥 Received iCal content via proxy, length:', icalContent.length);
-            console.log('📄 First 200 chars:', icalContent.substring(0, 200));
-            break;
-          }
-        } catch (proxyError) {
-          console.warn(`Proxy ${proxyUrl} failed:`, proxyError);
-          continue;
-        }
-      }
-      
-      if (!icalContent) {
-        throw new Error('All proxy methods failed. Please try downloading the .ics file and uploading it instead.');
-      }
+    // Try different strategies in order
+    icalContent = await tryDirectFetch(url) ?? 
+                  await tryProxyServices(url) ?? 
+                  await tryServerProxy(url) ?? 
+                  '';
+    
+    if (!icalContent) {
+      throw new Error(`Unable to fetch calendar data from the provided URL. This may be due to:
+1. CORS restrictions from the calendar provider
+2. Network connectivity issues
+3. Invalid or expired calendar URL
+4. Server-side restrictions
+
+Please verify that:
+- The URL is correct and accessible
+- The calendar is set to public/shareable
+- Your internet connection is stable
+
+If the problem persists, you may need to download the .ics file manually and upload it using the file upload option.`);
     }
+    
+    console.log('📥 Final content received, length:', icalContent.length);
+    console.log('📄 First 200 chars:', icalContent.substring(0, 200));
     
     // Clean the content and add better validation
     let cleanContent = icalContent.replace(/^\uFEFF/, '').trim();

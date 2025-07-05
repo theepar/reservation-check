@@ -13,19 +13,19 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Joglo Breeze Calendar - Airbnb & Booking.com Calendar Management",
+  title: "ReservCheck - Airbnb & Booking.com Calendar Management",
   description: "Manage your Airbnb and Booking.com reservations with our beautiful, responsive calendar interface. Import and track your bookings effortlessly.",
   keywords: "Airbnb calendar, Booking.com calendar, reservation management, property management, calendar import, ical, booking tracker",
-  authors: [{ name: "Joglo Breeze" }],
+  authors: [{ name: "ReservCheck" }],
   openGraph: {
-    title: "Joglo Breeze Calendar",
+    title: "ReservCheck Calendar",
     description: "Manage your Airbnb and Booking.com reservations with ease",
     type: "website",
     locale: "en_US",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Joglo Breeze Calendar",
+    title: "ReservCheck Calendar",
     description: "Manage your Airbnb and Booking.com reservations with ease",
   },
   robots: {
