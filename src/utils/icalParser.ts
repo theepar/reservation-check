@@ -1,443 +1,225 @@
 import { Booking } from '@/types/booking';
 
-// Parse iCal date format (YYYYMMDD or YYYYMMDDTHHMMSS)
-function parseICalDate(dateString: string): Date {
-  // Remove timezone info if present and clean the date string
-  let cleanDate = dateString.replace(/[TZ]/g, '');
-  
-  // Handle different date formats
-  if (cleanDate.length >= 8) {
-    cleanDate = cleanDate.substring(0, 8);
-  } else {
-    throw new Error(`Invalid date format: ${dateString}`);
-  }
-  
-  const year = parseInt(cleanDate.substring(0, 4));
-  const month = parseInt(cleanDate.substring(4, 6)) - 1; // Month is 0-based
-  const day = parseInt(cleanDate.substring(6, 8));
-  
-  // Validate parsed values
-  if (isNaN(year) || isNaN(month) || isNaN(day)) {
-    throw new Error(`Invalid date components: ${dateString}`);
-  }
-  
-  return new Date(year, month, day);
+// A type for the raw key-value pairs parsed from a VEVENT
+interface VEvent {
+  [key: string]: string;
 }
 
-// Parse iCal content and extract booking events
-function parseICalContent(icalContent: string, sourceUrl?: string): Booking[] {
-  const bookings: Booking[] = [];
-  
-  // Determine platform from URL, filename, or content
-  let platform: 'airbnb' | 'booking.com' | 'unknown' = 'unknown';
-  
-  if (sourceUrl) {
-    if (sourceUrl.includes('airbnb')) {
-      platform = 'airbnb';
-    } else if (sourceUrl.includes('booking.com')) {
-      platform = 'booking.com';
+/**
+ * Processes a single line from iCal data and adds it to the current event
+ */
+function processEventLine(
+    line: string, 
+    currentEvent: VEvent, 
+    lastKey: string
+): { updatedEvent: VEvent; newLastKey: string } {
+    let newLastKey = lastKey;
+
+    if (line.startsWith(' ')) {
+        // This is a folded line (a continuation of the previous line)
+        if (lastKey && currentEvent[lastKey]) {
+            currentEvent[lastKey] += line.substring(1);
+        }
+    } else {
+        // This is a new property
+        const regexResult = /^([^;:]+)(?:;[^:]+)?:(.*)$/.exec(line);
+        if (regexResult) {
+            const key = regexResult[1];
+            const value = regexResult[2];
+            currentEvent[key] = value;
+            newLastKey = key;
+        }
     }
-  }
-  
-  // Check content for platform indicators
-  if (icalContent.includes('booking.com') || icalContent.includes('Booking.com')) {
-    platform = 'booking.com';
-  } else if (icalContent.includes('airbnb.com') || icalContent.includes('Airbnb')) {
-    platform = 'airbnb';
-  }
-  
-  // If still unknown, try to detect from the content patterns
-  if (platform === 'unknown') {
-    // Look for typical Airbnb patterns
-    if (icalContent.includes('SUMMARY:Booked') || icalContent.includes('SUMMARY:Blocked')) {
-      platform = 'airbnb';
-    }
-    // Look for typical Booking.com patterns
-    else if (icalContent.includes('SUMMARY:Reserved') || icalContent.includes('SUMMARY:Confirmed')) {
-      platform = 'booking.com';
-    }
-  }
-  
-  console.log('🔍 Detected platform:', platform);
-  
-  // Split by lines and process events
-  const lines = icalContent.split(/\r\n|\n|\r/);
-  let currentEvent: {
-    start?: string;
-    end?: string;
-    summary?: string;
-    uid?: string;
-    description?: string;
-  } | null = null;
-  
-  for (const line of lines) {
-    if (line.startsWith('BEGIN:VEVENT')) {
-      currentEvent = {};
-    } else if (line.startsWith('END:VEVENT') && currentEvent) {
-      if (currentEvent.start && currentEvent.end && currentEvent.summary) {
-        try {
-          const startDate = parseICalDate(currentEvent.start);
-          const endDate = parseICalDate(currentEvent.end);
-          
-          // Skip if this looks like a blocked date rather than a real booking
-          const summary = currentEvent.summary.toLowerCase();
-          
-          // Check if this is a confirmed booking (Reserved, Booked, etc.)
-          const isConfirmed = summary.includes('reserved') ||
-                             summary.includes('booked') ||
-                             summary.includes('confirmed') ||
-                             summary === 'reserved' ||
-                             summary === 'booked';
-          
-          // Check if this is blocked/cancelled
-          const isBlocked = !isConfirmed && (
-                           summary.includes('blocked') || 
-                           summary.includes('not available') || 
-                           summary.includes('unavailable') ||
-                           summary.includes('cancelled') ||
-                           summary === 'busy' ||
-                           summary === 'blocked' ||
-                           summary === 'cancelled'
-                           );
-          
-          console.log('Parsing event:', {
-            summary: currentEvent.summary,
-            isBlocked,
-            isConfirmed,
-            startRaw: currentEvent.start,
-            endRaw: currentEvent.end,
-            startParsed: startDate.toDateString(),
-            endParsed: endDate.toDateString(),
-            platform
-          });
-          
-          // For all-day events, DTEND is exclusive (the day after the last day), 
-          // so we need to subtract 1 day for the actual end date
-          const actualEndDate = new Date(endDate);
-          actualEndDate.setDate(actualEndDate.getDate() - 1);
-          
-          // Skip if start date is after end date
-          if (startDate > actualEndDate) {
-            console.warn('Invalid date range, skipping event:', {
-              startDate: startDate.toDateString(),
-              endDate: actualEndDate.toDateString()
-            });
-            continue;
-          }
-          
-          // Determine guest name based on platform and content
-          let guestName = 'Unknown';
-          
-          // Try to extract guest name from description first
-          if (currentEvent.description) {
-            const guestMatch = /Guest:\s*(.+)/i.exec(currentEvent.description);
-            if (guestMatch) {
-              guestName = guestMatch[1].trim();
+
+    return { updatedEvent: currentEvent, newLastKey };
+}
+
+/**
+ * Parses iCal data into an array of VEvent objects
+ */
+function parseICalData(data: string): VEvent[] {
+    // Normalize line endings to LF and then split
+    const lines = data.replace(/\r\n/g, '\n').split('\n');
+
+    const events: VEvent[] = [];
+    let currentEvent: VEvent | null = null;
+    let lastKey = '';
+
+    for (const line of lines) {
+        if (line.startsWith('BEGIN:VEVENT')) {
+            currentEvent = {};
+        } else if (line.startsWith('END:VEVENT')) {
+            if (currentEvent) {
+                events.push(currentEvent);
+                currentEvent = null;
             }
-          }
-          
-          // If no guest name found in description, use summary-based logic
-          if (guestName === 'Unknown') {
-            const summary = currentEvent.summary.toLowerCase();
-            
-            // For Airbnb, blocked dates usually have generic names
-            if (platform === 'airbnb') {
-              if (isBlocked) {
-                guestName = 'Blocked';
-              } else if (summary.includes('reserved')) {
-                guestName = 'Reserved Guest';
-              } else if (summary === 'booked') {
-                guestName = 'Airbnb Guest';
-              } else {
-                // Real Airbnb bookings usually have guest names or reservation codes
-                guestName = currentEvent.summary;
-              }
-            } else if (platform === 'booking.com') {
-              if (isBlocked) {
-                guestName = 'Blocked';
-              } else if (summary.includes('reserved')) {
-                guestName = 'Reserved Guest';
-              } else if (summary === 'booked') {
-                guestName = 'Booking.com Guest';
-              } else {
-                // Booking.com bookings might have guest names
-                guestName = currentEvent.summary;
-              }
-            } else if (isBlocked) {
-              guestName = 'Blocked';
-            } else if (summary.includes('reserved')) {
-              guestName = 'Reserved Guest';
-            } else {
-              guestName = currentEvent.summary;
-            }
-          }
-          
-          // Determine property name from platform
-          let propertyName = 'Unknown Property';
-          if (platform === 'airbnb') {
-            propertyName = 'Airbnb Property';
-          } else if (platform === 'booking.com') {
-            propertyName = 'Booking.com Property';
-          }
-          
-          // Create booking object
-          const booking: Booking = {
-            id: currentEvent.uid ?? `${platform}-${Date.now()}-${Math.random()}`,
-            platform: platform as 'airbnb' | 'booking.com',
+        } else if (currentEvent) {
+            const result = processEventLine(line, currentEvent, lastKey);
+            currentEvent = result.updatedEvent;
+            lastKey = result.newLastKey;
+        }
+    }
+
+    return events;
+}
+
+/**
+ * Parses an iCal date string into a JavaScript Date object
+ */
+function parseDate(dateStr: string): Date {
+    const year = parseInt(dateStr.substring(0, 4), 10);
+    const month = parseInt(dateStr.substring(4, 6), 10) - 1; // Month is 0-indexed
+    const day = parseInt(dateStr.substring(6, 8), 10);
+
+    if (dateStr.length > 8) {
+        const hour = parseInt(dateStr.substring(9, 11), 10);
+        const minute = parseInt(dateStr.substring(11, 13), 10);
+        const second = parseInt(dateStr.substring(13, 15), 10);
+        return new Date(Date.UTC(year, month, day, hour, minute, second));
+    }
+
+    return new Date(Date.UTC(year, month, day));
+}
+
+/**
+ * Determines the booking status based on the event summary
+ */
+function determineBookingStatus(event: VEvent, platform: 'airbnb' | 'booking.com'): 'confirmed' | 'cancelled' {
+    const summary = event.SUMMARY ?? '';
+    const description = event.DESCRIPTION ?? '';
+    const lowerSummary = summary.toLowerCase();
+
+    if (lowerSummary === 'blocked' || lowerSummary === 'cancelled') {
+        return 'cancelled';
+    }
+
+    if (platform === 'airbnb') {
+        const statusMatch = /Status:\s*(.*?)(?:\r?\n|$)/i.exec(description);
+        if (statusMatch?.[1] && statusMatch[1].toLowerCase() === 'confirmed') {
+            return 'confirmed';
+        }
+    }
+
+    if (lowerSummary === 'booked' || lowerSummary === 'reserved') {
+        return 'confirmed';
+    }
+
+    return 'confirmed';
+}
+
+/**
+ * Extracts guest name from event data based on platform
+ */
+function extractGuestName(event: VEvent, platform: 'airbnb' | 'booking.com'): string {
+    const summary = event.SUMMARY ?? '';
+    const description = event.DESCRIPTION ?? '';
+
+    if (platform === 'airbnb') {
+        const guestMatch = /Guest:\s*(.*?)(?:\r?\n|$)/i.exec(description);
+        if (guestMatch?.[1]) {
+            return guestMatch[1].trim();
+        }
+        if (summary.toLowerCase() === 'blocked' || summary.toLowerCase() === 'cancelled') {
+            return 'Blocked';
+        }
+        return summary.trim();
+    } else if (platform === 'booking.com') {
+        if (summary.toLowerCase().includes('blocked') || summary.toLowerCase().includes('cancelled')) {
+            return 'Blocked';
+        }
+        if (description) {
+            return description.split(/\r?\n/)[0].trim();
+        }
+        return summary.replace(' - Closed', '').trim();
+    }
+    
+    return summary.trim() || 'Unknown Guest';
+}
+
+/**
+ * Parses iCal format data into Booking objects
+ * @param data - The iCal data string
+ * @param platform - The booking platform (airbnb or booking.com)
+ * @returns Array of Booking objects
+ */
+export const parseICal = (data: string, platform: 'airbnb' | 'booking.com' = 'airbnb'): Booking[] => {
+    if (!data.includes('BEGIN:VCALENDAR')) {
+        throw new Error('Invalid iCal data: Missing BEGIN:VCALENDAR');
+    }
+
+    const events = parseICalData(data);
+    
+    return events.map((event, index) => {
+        if (!event.DTSTART || !event.DTEND || !event.UID) {
+            console.warn(`Skipping invalid event at index ${index} due to missing DTSTART, DTEND, or UID:`, event);
+            return null;
+        }
+
+        const startDate = parseDate(event.DTSTART);
+        const endDate = parseDate(event.DTEND);
+
+        // For all-day events, the end date from iCal is exclusive (the morning of the next day).
+        // We adjust it to be inclusive (the end of the last day of the booking).
+        if (event.DTSTART.length === 8) { // It's a date (YYYYMMDD), not a datetime
+            endDate.setUTCDate(endDate.getUTCDate() - 1);
+        }
+        
+        const propertyName = event.LOCATION ?? 'Unknown Property';
+        const guestName = extractGuestName(event, platform);
+        const status = determineBookingStatus(event, platform);
+        const originalStatus = event.SUMMARY ?? '';
+
+        const newBooking: Booking = {
+            id: event.UID,
+            platform,
             propertyName,
             guestName,
             checkInDate: startDate,
-            checkOutDate: actualEndDate,
-            totalPrice: 0,
-            currency: 'USD',
-            status: isBlocked ? 'cancelled' : 'confirmed',
-            createdAt: new Date(),
-            updatedAt: new Date()
-          };
-          
-          console.log('✅ Successfully parsed booking:', {
-            guestName: booking.guestName,
-            checkInDate: booking.checkInDate.toDateString(),
-            checkOutDate: booking.checkOutDate.toDateString(),
-            platform: booking.platform,
-            status: booking.status,
-            isBlocked,
-            isConfirmed
-          });
-          
-          bookings.push(booking);
-        } catch (error) {
-          console.error('Error parsing event:', error, currentEvent);
-        }
-      }
-      currentEvent = null;
-    } else if (currentEvent) {
-      if (line.startsWith('DTSTART')) {
-        // Handle both DTSTART:20250710 and DTSTART;VALUE=DATE:20250710 formats
-        const colonIndex = line.indexOf(':');
-        if (colonIndex > -1) {
-          const value = line.substring(colonIndex + 1).trim();
-          if (value) {
-            currentEvent.start = value;
-          }
-        }
-      } else if (line.startsWith('DTEND')) {
-        // Handle both DTEND:20250710 and DTEND;VALUE=DATE:20250710 formats
-        const colonIndex = line.indexOf(':');
-        if (colonIndex > -1) {
-          const value = line.substring(colonIndex + 1).trim();
-          if (value) {
-            currentEvent.end = value;
-          }
-        }
-      } else if (line.startsWith('SUMMARY')) {
-        const colonIndex = line.indexOf(':');
-        if (colonIndex > -1) {
-          const value = line.substring(colonIndex + 1).trim();
-          if (value) {
-            currentEvent.summary = value;
-          }
-        }
-      } else if (line.startsWith('UID')) {
-        const colonIndex = line.indexOf(':');
-        if (colonIndex > -1) {
-          const value = line.substring(colonIndex + 1).trim();
-          if (value) {
-            currentEvent.uid = value;
-          }
-        }
-      } else if (line.startsWith('DESCRIPTION')) {
-        const colonIndex = line.indexOf(':');
-        if (colonIndex > -1) {
-          const value = line.substring(colonIndex + 1).trim();
-          if (value) {
-            currentEvent.description = value;
-          }
-        }
-      }
-    }
-  }
-  
-  console.log(`📅 Parsed ${bookings.length} bookings from iCal`);
-  return bookings;
-}
+            checkOutDate: endDate,
+            status, // Using our determined status
+            originalStatus, // Store the original SUMMARY from iCal
+            description: event.DESCRIPTION, // Ensure description is passed
+            createdAt: event.CREATED ? parseDate(event.CREATED) : new Date(),
+            updatedAt: event['LAST-MODIFIED'] ? parseDate(event['LAST-MODIFIED']) : new Date(),
+        };
 
-// Helper function to try direct fetch
-async function tryDirectFetch(url: string): Promise<string | null> {
-  try {
-    console.log('🔄 Strategy 1: Direct fetch');
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Accept': 'text/calendar, text/plain, */*',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      },
-      mode: 'cors'
-    });
-    
-    if (response.ok) {
-      const content = await response.text();
-      console.log('✅ Direct fetch successful, length:', content.length);
-      return content;
-    } else {
-      console.warn('❌ Direct fetch failed with status:', response.status);
-    }
-  } catch (error) {
-    console.warn('❌ Direct fetch failed due to CORS:', error);
-  }
-  return null;
-}
+        return newBooking;
+    }).filter((booking): booking is Booking => booking !== null);
+};
 
-// Helper function to try proxy services
-async function tryProxyServices(url: string): Promise<string | null> {
-  const proxyServices = [
-    {
-      name: 'AllOrigins',
-      url: `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-      parseResponse: async (response: Response) => {
-        const data = await response.json();
-        return data.contents;
-      }
-    },
-    {
-      name: 'CorsProxy.io',
-      url: `https://corsproxy.io/?${encodeURIComponent(url)}`,
-      parseResponse: async (response: Response) => {
-        return await response.text();
-      }
-    },
-    {
-      name: 'Proxy.cors.sh',
-      url: `https://proxy.cors.sh/${url}`,
-      parseResponse: async (response: Response) => {
-        return await response.text();
-      }
-    },
-    {
-      name: 'ThingProxy',
-      url: `https://thingproxy.freeboard.io/fetch/${url}`,
-      parseResponse: async (response: Response) => {
-        return await response.text();
-      }
-    }
-  ];
-  
-  for (const proxy of proxyServices) {
-    try {
-      console.log(`🔄 Strategy 2: Trying ${proxy.name}...`);
-      const response = await fetch(proxy.url, {
-        method: 'GET',
-        headers: {
-          'Accept': 'text/calendar, text/plain, application/json, */*',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-      });
-      
-      if (response.ok) {
-        const content = await proxy.parseResponse(response);
-        if (content && typeof content === 'string' && content.length > 0) {
-          console.log(`✅ ${proxy.name} successful, length:`, content.length);
-          return content;
-        }
-      } else {
-        console.warn(`❌ ${proxy.name} failed with status:`, response.status);
-      }
-    } catch (error) {
-      console.warn(`❌ ${proxy.name} failed:`, error);
-    }
-  }
-  return null;
-}
 
-// Helper function to try server-side proxy
-async function tryServerProxy(url: string): Promise<string | null> {
-  try {
-    console.log('🔄 Strategy 3: Server-side proxy');
-    const response = await fetch('/api/proxy-calendar', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ url })
-    });
-    
-    if (response.ok) {
-      const data = await response.json();
-      console.log('✅ Server-side proxy successful, length:', data.content.length);
-      return data.content;
-    } else {
-      console.warn('❌ Server-side proxy failed with status:', response.status);
-    }
-  } catch (error) {
-    console.warn('❌ Server-side proxy failed:', error);
-  }
-  return null;
-}
 
 // Fetch iCal from URL and parse it
 export async function fetchAirbnbCalendar(url: string): Promise<Booking[]> {
   if (!url) {
     throw new Error('URL is required');
   }
-  
   try {
     console.log('🔍 Fetching iCal from URL:', url);
-    
     let icalContent = '';
-    
     // Try different strategies in order
     icalContent = await tryDirectFetch(url) ?? 
                   await tryProxyServices(url) ?? 
-                  await tryServerProxy(url) ?? 
+                  await tryServerProxy() ?? 
                   '';
-    
     if (!icalContent) {
-      throw new Error(`Unable to fetch calendar data from the provided URL. This may be due to:
-1. CORS restrictions from the calendar provider
-2. Network connectivity issues
-3. Invalid or expired calendar URL
-4. Server-side restrictions
-
-Please verify that:
-- The URL is correct and accessible
-- The calendar is set to public/shareable
-- Your internet connection is stable
-
-If the problem persists, you may need to download the .ics file manually and upload it using the file upload option.`);
+      throw new Error(`Unable to fetch calendar data from the provided URL. This may be due to:\n1. CORS restrictions from the calendar provider\n2. Network connectivity issues\n3. Invalid or expired calendar URL\n4. Server-side restrictions\n\nPlease verify that:\n- The URL is correct and accessible\n- The calendar is set to public/shareable\n- Your internet connection is stable\n\nIf the problem persists, you may need to download the .ics file manually and upload it using the file upload option.`);
     }
-    
-    console.log('📥 Final content received, length:', icalContent.length);
-    console.log('📄 First 200 chars:', icalContent.substring(0, 200));
-    
     // Clean the content and add better validation
     let cleanContent = icalContent.replace(/^\uFEFF/, '').trim();
-    
-    // Log the content for debugging
-    console.log('🔍 Content analysis:');
-    console.log('  - Length:', cleanContent.length);
-    console.log('  - Starts with:', cleanContent.substring(0, 50));
-    console.log('  - Contains VCALENDAR:', cleanContent.includes('BEGIN:VCALENDAR'));
-    
-    // Try to find and extract the calendar content if it's embedded
     if (!cleanContent.includes('BEGIN:VCALENDAR')) {
       // Sometimes the content might be HTML with embedded iCal
       const icalRegex = /BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/;
       const icalMatch = icalRegex.exec(cleanContent);
       if (icalMatch) {
         cleanContent = icalMatch[0];
-        console.log('📦 Extracted embedded iCal content, length:', cleanContent.length);
       } else {
-        console.error('❌ Missing VCALENDAR, content preview:', cleanContent.substring(0, 500));
         throw new Error('Invalid iCal format: missing VCALENDAR. The URL might not be returning iCal data or might be blocked by CORS.');
       }
     }
-    
     const bookings = parseICalContent(cleanContent, url);
-    console.log('✅ Successfully parsed calendar:', bookings.length, 'bookings');
-    
     return bookings;
   } catch (error) {
-    console.error('❌ Error fetching calendar:', error);
     if (error instanceof Error) {
       if (error.message.includes('CORS')) {
         throw new Error('Unable to fetch calendar due to browser security restrictions. Please try downloading the .ics file and uploading it instead.');
@@ -448,66 +230,67 @@ If the problem persists, you may need to download the .ics file manually and upl
   }
 }
 
-// Parse iCal file content
-export async function parseICalFile(file: File): Promise<Booking[]> {
-  if (!file) {
-    throw new Error('File is required');
-  }
-  
-  try {
-    console.log('📁 Parsing iCal file:', file.name, 'Size:', file.size, 'bytes');
-    
-    const icalContent = await file.text();
-    console.log('📥 Read file content, length:', icalContent.length);
-    console.log('📄 First 200 chars:', icalContent.substring(0, 200));
-    
-    // Check for BOM and remove it
-    const cleanContent = icalContent.replace(/^\uFEFF/, '');
-    
-    if (!cleanContent.includes('BEGIN:VCALENDAR')) {
-      console.error('❌ Missing VCALENDAR, content preview:', cleanContent.substring(0, 500));
-      throw new Error('Invalid iCal format: missing VCALENDAR');
+/**
+ * Tries to fetch iCal data directly from the URL
+ * @param url - The URL to fetch from
+ * @returns The iCal data string or null if failed
+ */
+async function tryDirectFetch(url: string): Promise<string | null> {
+    try {
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            },
+        });
+        if (response.ok) {
+            const text = await response.text();
+            if (text.includes('BEGIN:VCALENDAR')) {
+                return text;
+            }
+        }
+    } catch {
+        // ignore, will try proxy next
     }
-    
-    const bookings = parseICalContent(cleanContent);
-    console.log('✅ Successfully parsed file:', bookings.length, 'bookings');
-    
-    return bookings;
-  } catch (error) {
-    console.error('❌ Error parsing file:', error);
-    throw error;
-  }
+    return null;
 }
 
-// Validate iCal URL format
-export function validateICalUrl(url: string): boolean {
-  try {
-    const urlObj = new URL(url);
-    
-    // Check if protocol is valid
-    if (urlObj.protocol !== 'https:' && urlObj.protocol !== 'http:') {
-      return false;
+/**
+ * Tries to fetch iCal data using various proxy services
+ * @param url - The URL to fetch from
+ * @returns The iCal data string or null if failed
+ */
+async function tryProxyServices(url: string): Promise<string | null> {
+    try {
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+        const response = await fetch(proxyUrl);
+        if (response.ok) {
+            const text = await response.text();
+            if (text.includes('BEGIN:VCALENDAR')) {
+                return text;
+            }
+        }
+    } catch {
+        // ignore, will try next
     }
-    
-    // Check for known iCal patterns
-    const validPatterns = [
-      // Airbnb patterns - exact format: https://www.airbnb.com/calendar/ical/[ID].ics?s=[token]
-      /^https:\/\/www\.airbnb\.com\/calendar\/ical\/\d+\.ics\?s=[a-f0-9]+$/i,
-      /^https:\/\/www\.airbnb\.[a-z]+\/calendar\/ical\/\d+\.ics\?s=[a-f0-9]+$/i,
-      
-      // Booking.com patterns - exact format: https://ical.booking.com/v1/export?t=[uuid]
-      /^https:\/\/ical\.booking\.com\/v1\/export\?t=[a-f0-9-]+$/i,
-      
-      // Generic .ics file pattern for other services
-      /\.ics(\?.*)?$/i,
-      
-      // Fallback patterns for other calendar services
-      /calendar.*ical/i,
-      /ical.*calendar/i
-    ];
-    
-    return validPatterns.some(pattern => pattern.test(url));
-  } catch {
-    return false;
-  }
+    return null;
+}
+
+/**
+ * Tries to fetch iCal data using a server-side proxy (if available)
+ * @returns The iCal data string or null if failed
+ */
+async function tryServerProxy(): Promise<string | null> {
+    // Server-side proxy not implemented yet
+    return null;
+}
+
+/**
+ * Parses and returns Booking objects from iCal content
+ * @param content - The iCal content string
+ * @param sourceUrl - The original URL (for error reporting)
+ * @returns Array of Booking objects
+ */
+function parseICalContent(content: string, sourceUrl: string): Booking[] {
+    const platform = sourceUrl.includes('airbnb') ? 'airbnb' : 'booking.com';
+    return parseICal(content, platform);
 }

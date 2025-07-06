@@ -6,12 +6,24 @@ import { generateCalendarMonth, getMonthName, getWeekdayNames, navigateMonth } f
 import { loadBookingsFromStorage } from '@/utils/storage';
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 
+// Function to check if a booking is blocked (cancelled or blocked guest)
+const isBookingBlocked = (booking: Booking): boolean => {
+  const isStatusBlocked = booking.status === 'cancelled';
+  const isGuestBlocked = booking.guestName ? (
+    booking.guestName.toLowerCase().includes('blocked') ||
+    booking.guestName.toLowerCase().includes('maintenance') ||
+    booking.guestName.toLowerCase().includes('block')
+  ) : false;
+  return isStatusBlocked || isGuestBlocked;
+};
+
 interface CalendarProps {
   readonly onDateSelect?: (date: Date) => void;
   readonly bookings?: Booking[];
+  readonly getBookingStatus?: (bookings: Booking[]) => 'confirmed' | 'cancelled' | 'mixed' | 'pending';
 }
 
-export default function Calendar({ onDateSelect, bookings }: CalendarProps) {
+export default function Calendar({ onDateSelect, bookings, getBookingStatus }: CalendarProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [calendarMonth, setCalendarMonth] = useState<CalendarMonth | null>(null);
   const [currentBookings, setCurrentBookings] = useState<Booking[]>([]);
@@ -78,43 +90,49 @@ export default function Calendar({ onDateSelect, bookings }: CalendarProps) {
     setSelectedDay(null);
   };
 
+  const getStatusBasedClasses = (day: CalendarDay): string => {
+    if (getBookingStatus) {
+      const status = getBookingStatus(day.bookings);
+      switch (status) {
+        case 'mixed':
+          return 'bg-orange-500 text-white hover:bg-orange-600';
+        case 'confirmed':
+          return 'bg-green-500 text-white hover:bg-green-600';
+        case 'cancelled':
+          return 'bg-red-500 text-white hover:bg-red-600';
+        default:
+          return '';
+      }
+    }
+    return '';
+  };
+
+  const getFallbackClasses = (day: CalendarDay): string => {
+    const hasConfirmedBooking = day.bookings.some(booking => booking.status === 'confirmed');
+    const hasBlockedBooking = day.bookings.some(booking => isBookingBlocked(booking));
+    
+    if (hasConfirmedBooking && hasBlockedBooking) {
+      return 'bg-orange-500 text-white hover:bg-orange-600';
+    } else if (hasConfirmedBooking && !hasBlockedBooking) {
+      return 'bg-green-500 text-white hover:bg-green-600';
+    } else if (hasBlockedBooking && !hasConfirmedBooking) {
+      return 'bg-red-500 text-white hover:bg-red-600';
+    }
+    return '';
+  };
+
   const getDayClassName = (day: CalendarDay): string => {
     const baseClasses = 'aspect-square flex items-center justify-center text-sm font-normal rounded-full transition-all duration-200 cursor-pointer relative overflow-hidden';
     const classes = [baseClasses];
-
-    // Function to check if a booking is blocked (cancelled or blocked guest)
-    const isBookingBlocked = (booking: Booking): boolean => {
-      const isStatusBlocked = booking.status === 'cancelled';
-      const isGuestBlocked = booking.guestName ? (
-        booking.guestName.toLowerCase().includes('blocked') ||
-        booking.guestName.toLowerCase().includes('maintenance') ||
-        booking.guestName.toLowerCase().includes('block')
-      ) : false;
-      return isStatusBlocked || isGuestBlocked;
-    };
 
     if (!day.isCurrentMonth) {
       classes.push('text-gray-400 hover:bg-gray-50');
     } else if (day.isToday) {
       classes.push('bg-blue-500 text-white hover:bg-blue-600');
     } else if (day.bookings.length > 0) {
-      // Check booking statuses
-      const hasConfirmedBooking = day.bookings.some(booking => booking.status === 'confirmed');
-      const hasBlockedBooking = day.bookings.some(booking => isBookingBlocked(booking));
-      
-      // If there are both confirmed and blocked bookings, it's mixed
-      if (hasConfirmedBooking && hasBlockedBooking) {
-        // Mixed status - orange color
-        classes.push('bg-orange-500 text-white hover:bg-orange-600');
-      } else if (hasConfirmedBooking && !hasBlockedBooking) {
-        // All bookings are confirmed - green color
-        classes.push('bg-green-500 text-white hover:bg-green-600');
-      } else if (hasBlockedBooking && !hasConfirmedBooking) {
-        // All bookings are blocked - red color
-        classes.push('bg-red-500 text-white hover:bg-red-600');
-      } else {
-        // Fallback - should not happen, but handle just in case
-        classes.push('bg-gray-500 text-white hover:bg-gray-600');
+      const statusClasses = getStatusBasedClasses(day) || getFallbackClasses(day);
+      if (statusClasses) {
+        classes.push(statusClasses);
       }
     } else {
       classes.push('text-gray-700 hover:bg-gray-50');
@@ -190,7 +208,7 @@ export default function Calendar({ onDateSelect, bookings }: CalendarProps) {
         <div className="flex flex-wrap justify-center items-center gap-4 text-xs sm:text-sm">
           <div className="flex items-center">
             <div className="w-3 h-3 bg-blue-500 rounded-full mr-2"></div>
-            <span className="text-gray-700 font-medium">Hari Ini</span>
+            <span className="text-gray-700 font-medium">Today</span>
           </div>
           <div className="flex items-center">
             <div className="w-3 h-3 bg-green-500 rounded-full mr-2"></div>
@@ -206,7 +224,7 @@ export default function Calendar({ onDateSelect, bookings }: CalendarProps) {
           </div>
           <div className="flex items-center">
             <div className="w-3 h-3 bg-gray-200 rounded-full mr-2"></div>
-            <span className="text-gray-700 font-medium">Tersedia</span>
+            <span className="text-gray-700 font-medium">Available</span>
           </div>
         </div>
       </div>
@@ -229,8 +247,23 @@ interface BookingDetailModalProps {
 }
 
 function BookingDetailModal({ day, onClose }: BookingDetailModalProps) {
+  // Handle keyboard events for closing modal
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
+
   const formatDate = (date: Date) => {
-    return date.toLocaleDateString('id-ID', {
+    return date.toLocaleDateString('en-US', {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
@@ -238,35 +271,95 @@ function BookingDetailModal({ day, onClose }: BookingDetailModalProps) {
     });
   };
 
-  // Function to check if a booking is blocked (cancelled or blocked guest)
-  const isBookingBlocked = (booking: Booking): boolean => {
-    const isStatusBlocked = booking.status === 'cancelled';
-    const isGuestBlocked = booking.guestName ? (
-      booking.guestName.toLowerCase().includes('blocked') ||
-      booking.guestName.toLowerCase().includes('maintenance') ||
-      booking.guestName.toLowerCase().includes('block')
-    ) : false;
-    return isStatusBlocked || isGuestBlocked;
+  // Fungsi untuk mengambil data dari description Airbnb (sama seperti HTML yang berhasil)
+  const getAirbnbData = (description: string) => {
+    const data = {
+      guest: 'Tidak diketahui',
+      status: 'Unknown',
+      reservationId: 'Unknown ID',
+      propertyId: 'Unknown ID'
+    };
+
+    if (!description) return data;
+
+    // Extract Status from DESCRIPTION
+    const statusMatch = description.match(/Status:\s*(\w+)/i);
+    if (statusMatch && statusMatch[1]) {
+      data.status = statusMatch[1];
+    }
+
+    // Extract Guest from DESCRIPTION, looking for the end of the line or the start of another known field
+    const guestMatch = description.match(/Guest:\s*(.*?)(?=\n|Reservation ID:|Status:|$)/i);
+    if (guestMatch && guestMatch[1]) {
+      data.guest = guestMatch[1].trim();
+    }
+
+    // Extract Reservation ID from DESCRIPTION, looking for the end of the line or start of another field
+    const resvIdMatch = description.match(/Reservation ID:\s*(.*?)(?=\n|Guest:|Status:|$)/i);
+    if (resvIdMatch && resvIdMatch[1]) {
+      data.reservationId = resvIdMatch[1].trim();
+    }
+
+    // Extract Property ID from DESCRIPTION for blocked bookings
+    const propertyIdMatch = description.match(/Property ID:\s*(.*?)(?=\n|Guest:|Status:|Reservation ID:|$)/i);
+    if (propertyIdMatch && propertyIdMatch[1]) {
+      data.propertyId = propertyIdMatch[1].trim();
+    }
+
+    return data;
+  };
+
+  const getGuestDisplayName = (booking: Booking): string => {
+    if (booking.platform === 'airbnb' && booking.description) {
+      const airbnbData = getAirbnbData(booking.description);
+      return airbnbData.guest;
+    }
+    if (booking.platform === 'booking.com' && booking.description) {
+      // Booking.com: Use first line from description
+      return booking.description.split(/\r?\n/)[0].trim();
+    }
+    return booking.guestName ?? 'Unknown Guest';
+  };
+
+  const getReservationStatus = (booking: Booking): string => {
+    if (booking.platform === 'airbnb' && booking.description) {
+      const airbnbData = getAirbnbData(booking.description);
+      return airbnbData.status;
+    }
+    // Fallback to original status or summary
+    return booking.status || booking.originalStatus || 'Unknown';
+  };
+
+  const getReservationId = (booking: Booking): string => {
+    if (booking.platform === 'airbnb' && booking.description) {
+      const airbnbData = getAirbnbData(booking.description);
+      // If status is blocked, return Property ID, otherwise return Reservation ID
+      if (airbnbData.status.toLowerCase() === 'blocked') {
+        return airbnbData.propertyId;
+      } else {
+        return airbnbData.reservationId;
+      }
+    }
+    // Fallback to booking ID
+    return booking.id || 'Unknown ID';
+  };
+
+  const getIdLabel = (booking: Booking): string => {
+    if (booking.platform === 'airbnb' && booking.description) {
+      const airbnbData = getAirbnbData(booking.description);
+      return airbnbData.status.toLowerCase() === 'blocked' ? 'Property ID' : 'Reservation ID';
+    }
+    return 'Booking ID';
   };
 
   const getStatusColor = (booking: Booking) => {
+    if (isBookingBlocked(booking)) {
+      return 'text-red-600 bg-red-50';
+    }
     if (booking.status === 'confirmed') {
       return 'text-green-600 bg-green-50';
-    } else if (isBookingBlocked(booking)) {
-      return 'text-red-600 bg-red-50';
-    } else {
-      return 'text-gray-600 bg-gray-50';
     }
-  };
-
-  const getStatusText = (booking: Booking) => {
-    if (booking.status === 'confirmed') {
-      return 'Confirmed';
-    } else if (isBookingBlocked(booking)) {
-      return 'Blocked';
-    } else {
-      return 'Unknown';
-    }
+    return 'text-gray-600 bg-gray-50';
   };
 
   const getPlatformIcon = (platform: string) => {
@@ -280,8 +373,20 @@ function BookingDetailModal({ day, onClose }: BookingDetailModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl p-4 sm:p-6 w-full max-w-md sm:max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+    <>
+      {/* Layer 2: Clickable overlay for closing modal */}
+      <button 
+        className="fixed inset-0 z-50 w-full h-full cursor-default bg-transparent border-0 p-0"
+        onClick={onClose}
+        aria-label="Close modal"
+        type="button"
+      >
+        {/* Layer 3: Modal content (prevent clicks from bubbling up) */}
+        <div className="relative flex items-center justify-center min-h-full p-4 pointer-events-none">
+          <div 
+            className="bg-white rounded-2xl shadow-2xl p-4 sm:p-6 w-full max-w-md sm:max-w-lg mx-4 max-h-[90vh] overflow-y-auto modal-content border border-gray-200 pointer-events-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
         {/* Header */}
         <div className="flex items-center justify-between mb-4 sm:mb-6">
           <h3 className="text-lg sm:text-xl font-bold text-gray-900">
@@ -306,73 +411,99 @@ function BookingDetailModal({ day, onClose }: BookingDetailModalProps) {
 
         {/* Bookings List */}
         <div className="space-y-4">
-          <h4 className="text-sm font-semibold text-gray-900 mb-3">
+          <h4 className="text-sm font-semibold text-gray-900 mb-3">   
             Bookings ({day.bookings.length})
           </h4>
           
-          {day.bookings.map((booking, index) => (
-            <div key={booking.id || index} className="border border-gray-200 rounded-xl p-4 space-y-3">
-              {/* Platform and Status */}
-              <div className="flex items-center justify-between">
-                <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getPlatformColor(booking.platform)}`}>
-                  <span className="w-4 h-4 rounded-full bg-current text-white flex items-center justify-center text-xs mr-2">
-                    {getPlatformIcon(booking.platform)}
-                  </span>
-                  {booking.platform === 'airbnb' ? 'Airbnb' : 'Booking.com'}
+          {day.bookings.map((booking, index) => {
+            const isBlocked = isBookingBlocked(booking);
+
+            return (
+              <div key={booking.id || index} className="border border-gray-200 rounded-xl p-4 space-y-4">
+                {/* Header with Platform and Status */}
+                <div className="flex items-center justify-between">
+                  <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${getPlatformColor(booking.platform)}`}>
+                    <span className="w-4 h-4 rounded-full bg-current text-white flex items-center justify-center text-xs mr-2">
+                      {getPlatformIcon(booking.platform)}
+                    </span>
+                    {booking.platform === 'airbnb' ? 'Airbnb' : 'Booking.com'}
+                  </div>
+                  <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(booking)}`}>
+                    {isBlocked ? 'Blocked' : getReservationStatus(booking)}
+                  </div>
                 </div>
-                <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(booking)}`}>
-                  {getStatusText(booking)}
+
+                {/* Booking Details Grid */}
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                  {/* Guest Name */}
+                  <div className="col-span-2">
+                    <p className="text-gray-500">Guest</p>
+                    <p className="font-semibold text-gray-900">{getGuestDisplayName(booking)}</p>
+                  </div>
+
+                  {/* Airbnb specific fields */}
+                  {booking.platform === 'airbnb' && (
+                    <>
+                      {/* Status - from description */}
+                      <div className="col-span-2">
+                        <p className="text-gray-500">Status</p>
+                        <p className="font-semibold text-gray-900">{getReservationStatus(booking)}</p>
+                      </div>
+
+                      {/* Reservation ID or Property ID - from description */}
+                      <div className="col-span-2">
+                        <p className="text-gray-500">{getIdLabel(booking)}</p>
+                        <p className="font-mono text-xs text-gray-800 break-words">{getReservationId(booking)}</p>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Booking.com specific fields */}
+                  {booking.platform === 'booking.com' && (
+                    <>
+                      {/* Property Name */}
+                      {booking.propertyName && booking.propertyName !== 'Unknown Property' && (
+                        <div className="col-span-2">
+                          <p className="text-gray-500">Property</p>
+                          <p className="font-semibold text-gray-900">{booking.propertyName}</p>
+                        </div>
+                      )}
+
+                      {/* Check-in Date */}
+                      <div>
+                        <p className="text-gray-500">Check-in</p>
+                        <p className="font-semibold text-gray-900">{booking.checkInDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                      </div>
+
+                      {/* Check-out Date */}
+                      <div>
+                        <p className="text-gray-500">Check-out</p>
+                        <p className="font-semibold text-gray-900">{booking.checkOutDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                      </div>
+
+                      {/* Duration */}
+                      <div className="col-span-2">
+                        <p className="text-gray-500">Duration</p>
+                        <p className="font-semibold text-gray-900">
+                          {Math.ceil((booking.checkOutDate.getTime() - booking.checkInDate.getTime()) / (1000 * 60 * 60 * 24))} night(s)
+                        </p>
+                      </div>
+
+                      {/* Booking ID */}
+                      {booking.id && (
+                        <div className="col-span-2">
+                          <p className="text-gray-500">Booking ID</p>
+                          <p className="font-mono text-xs text-gray-800 break-words">{booking.id}</p>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
-
-              {/* Booking Details */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                <div>
-                  <span className="text-gray-500 font-medium">Check-in:</span>
-                  <p className="text-gray-900">{booking.checkInDate.toLocaleDateString('id-ID')}</p>
-                </div>
-                <div>
-                  <span className="text-gray-500 font-medium">Check-out:</span>
-                  <p className="text-gray-900">{booking.checkOutDate.toLocaleDateString('id-ID')}</p>
-                </div>
-              </div>
-
-              {/* Guest Name */}
-              {booking.guestName && (
-                <div className="text-sm">
-                  <span className="text-gray-500 font-medium">Guest:</span>
-                  <p className="text-gray-900">{booking.guestName}</p>
-                </div>
-              )}
-
-              {/* Property Name */}
-              {booking.propertyName && (
-                <div className="text-sm">
-                  <span className="text-gray-500 font-medium">Property:</span>
-                  <p className="text-gray-900">{booking.propertyName}</p>
-                </div>
-              )}
-
-              {/* Booking ID */}
-              {booking.id && (
-                <div className="text-sm">
-                  <span className="text-gray-500 font-medium">Booking ID:</span>
-                  <p className="text-gray-900 font-mono text-xs">{booking.id}</p>
-                </div>
-              )}
-
-              {/* Duration */}
-              <div className="text-sm">
-                <span className="text-gray-500 font-medium">Duration:</span>
-                <p className="text-gray-900">
-                  {Math.ceil((booking.checkOutDate.getTime() - booking.checkInDate.getTime()) / (1000 * 60 * 60 * 24))} night(s)
-                </p>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
 
-        {/* Close Button */}
         <div className="mt-6 flex justify-end">
           <button
             onClick={onClose}
@@ -381,7 +512,9 @@ function BookingDetailModal({ day, onClose }: BookingDetailModalProps) {
             Close
           </button>
         </div>
-      </div>
-    </div>
+          </div>
+        </div>
+      </button>
+    </>
   );
 }

@@ -1,13 +1,14 @@
 export interface Booking {
   id: string;
-  platform: 'airbnb' | 'booking.com';
+  platform: 'airbnb' | 'booking.com' | 'other';
   propertyName: string;
-  guestName: string;
+  guestName?: string; // Make optional as we transition
+  guest?: string; // For extracted guest name
+  description?: string; // For full description from iCal
   checkInDate: Date;
   checkOutDate: Date;
-  totalPrice: number;
-  currency: string;
   status: 'confirmed' | 'pending' | 'cancelled';
+  originalStatus?: string; // Original status from iCal SUMMARY field
   createdAt: Date;
   updatedAt: Date;
 }
@@ -18,8 +19,6 @@ export interface BookingFormData {
   guestName: string;
   checkInDate: string;
   checkOutDate: string;
-  totalPrice: number;
-  currency: string;
   status: 'confirmed' | 'pending' | 'cancelled';
 }
 

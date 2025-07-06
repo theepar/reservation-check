@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Booking } from '@/types/booking';
 import { loadBookingsFromStorage, saveBookingsToStorage } from '@/utils/storage';
-import { fetchAirbnbCalendar } from '@/utils/icalParser';
+import { fetchAirbnbCalendar, parseICal } from '@/utils/icalParser';
 import { sampleBookings } from '@/utils/sampleData';
 import Calendar from '@/components/Calendar';
 import UrlUpload from '@/components/UrlUpload';
@@ -26,6 +26,31 @@ export default function HomePage() {
       booking.guestName.toLowerCase().includes('block')
     ) : false;
     return isStatusBlocked || isGuestBlocked;
+  };
+
+  // Function to determine the booking status for a given day
+  const getBookingStatus = (bookings: Booking[]): 'confirmed' | 'cancelled' | 'mixed' | 'pending' => {
+    if (!bookings || bookings.length === 0) return 'pending';
+    
+    let hasConfirmed = false;
+    let hasBlocked = false;
+    
+    for (const booking of bookings) {
+      if (isBookingBlocked(booking)) {
+        hasBlocked = true;
+      } else if (booking.status === 'confirmed') {
+        hasConfirmed = true;
+      }
+      
+      // If we have both types, we can exit early
+      if (hasConfirmed && hasBlocked) {
+        return 'mixed';
+      }
+    }
+    
+    if (hasConfirmed) return 'confirmed';
+    if (hasBlocked) return 'cancelled'; // We use 'cancelled' to indicate blocked dates in the UI
+    return 'pending';
   };
 
   // Load bookings from localStorage on component mount
@@ -94,8 +119,10 @@ export default function HomePage() {
   const handleUploadFile = async (file: File) => {
     setIsImporting(true);
     try {
-      const { parseICalFile } = await import('@/utils/icalParser');
-      const importedBookings = await parseICalFile(file);
+      const fileContent = await file.text();
+      const platform = file.name.toLowerCase().includes('airbnb') ? 'airbnb' : 'booking.com';
+      const importedBookings = parseICal(fileContent, platform);
+
       console.log('✅ Successfully uploaded bookings:', importedBookings.map(b => ({
         guestName: b.guestName,
         checkIn: b.checkInDate.toDateString(),
@@ -177,7 +204,7 @@ export default function HomePage() {
               Reservation Calendar
             </h1>
             <p className="text-gray-600 mt-1 text-sm">
-              Your imported Airbnb or Booking.com reservations
+              Your imported Airbnb and Booking.com reservations
               {lastImportDate && (
                 <span className="text-xs text-gray-500 block mt-1">
                   Last updated: {lastImportDate.toLocaleDateString()} at {lastImportDate.toLocaleTimeString()}
@@ -298,6 +325,7 @@ export default function HomePage() {
           <Calendar
             onDateSelect={handleDateSelect}
             bookings={bookings}
+            getBookingStatus={getBookingStatus}
           />
         </div>
 
